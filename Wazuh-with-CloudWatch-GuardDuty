@@ -1,0 +1,101 @@
+#!/bin/bash
+# ============================================
+# Wazuh All-in-One Installation Script
+# Auto-detects VM IP and prints access info
+# Optionally configures AWS CloudWatch + GuardDuty ingestion
+# ============================================
+
+set -e
+
+echo "[1/10] Updating system packages..."
+apt-get update -y && apt-get upgrade -y
+
+echo "[2/10] Installing dependencies..."
+apt-get install -y curl apt-transport-https gnupg lsb-release tar unzip wget software-properties-common ufw
+
+echo "[3/10] Downloading Wazuh installer..."
+curl -sO https://packages.wazuh.com/4.9/wazuh-install.sh
+
+echo "[4/10] Installing Wazuh (Indexer + Server + Dashboard)..."
+bash ./wazuh-install.sh -a
+
+echo "[5/10] Enabling and starting services..."
+systemctl enable wazuh-manager wazuh-indexer wazuh-dashboard
+systemctl start wazuh-manager wazuh-indexer wazuh-dashboard
+
+echo "[6/10] Configuring firewall..."
+ufw allow 1514/udp   # Wazuh agents
+ufw allow 55000/tcp  # Wazuh API
+ufw allow 443/tcp    # Wazuh dashboard
+ufw allow 22/tcp     # SSH
+ufw --force enable
+
+# Auto-detect IP
+VM_IP=$(hostname -I | awk '{print $1}')
+
+echo "[7/10] Retrieving default credentials..."
+if [ -f /root/.wazuh-install-files/wazuh-passwords.txt ]; then
+    CREDS_FILE="/root/.wazuh-install-files/wazuh-passwords.txt"
+else
+    CREDS_FILE="NOT FOUND - check installation logs"
+fi
+
+# -------------------------------
+# Optional AWS CloudWatch + GuardDuty Ingestion
+# -------------------------------
+read -p "Do you want to configure CloudWatch + GuardDuty ingestion now? (y/n): " ENABLE_AWS
+
+if [[ "$ENABLE_AWS" == "y" || "$ENABLE_AWS" == "Y" ]]; then
+    echo "[8/10] Setting up AWS ingestion..."
+
+    AWS_CONF="/var/ossec/etc/ossec.conf"
+
+    # Backup original config
+    cp $AWS_CONF ${AWS_CONF}.bak.$(date +%F)
+
+    # Insert AWS wodles into ossec.conf
+    cat <<EOF >> $AWS_CONF
+
+  <!-- AWS CloudWatch Logs -->
+  <wodle name="aws">
+    <disabled>no</disabled>
+    <interval>5m</interval>
+    <run_on_start>yes</run_on_start>
+    <aws_log_groups>
+      <log_group>/aws/containerinsights/my-cluster/application</log_group>
+      <log_group>/aws/containerinsights/my-cluster/host</log_group>
+      <log_group>/aws/containerinsights/my-cluster/dataplane</log_group>
+    </aws_log_groups>
+    <aws_region>us-east-1</aws_region>
+  </wodle>
+
+  <!-- AWS GuardDuty Findings -->
+  <wodle name="aws-s3">
+    <disabled>no</disabled>
+    <interval>10m</interval>
+    <run_on_start>yes</run_on_start>
+    <bucket type="guardduty">
+      <name>my-guardduty-bucket</name>
+      <regions>us-east-1</regions>
+    </bucket>
+  </wodle>
+
+EOF
+
+    echo "[9/10] Restarting Wazuh Manager to apply AWS ingestion..."
+    systemctl restart wazuh-manager
+fi
+
+# -------------------------------
+# Print summary
+# -------------------------------
+echo "===================================================="
+echo " Wazuh Installation Completed!"
+echo " Access Dashboard: https://$VM_IP"
+echo " Default User: admin"
+echo " Default Pass: (check $CREDS_FILE)"
+if [[ "$ENABLE_AWS" == "y" || "$ENABLE_AWS" == "Y" ]]; then
+    echo "  AWS CloudWatch + GuardDuty ingestion enabled!"
+    echo "   Edit /var/ossec/etc/ossec.conf to adjust log groups/bucket."
+fi
+echo "===================================================="
