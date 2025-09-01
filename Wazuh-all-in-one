@@ -1,0 +1,78 @@
+#!/bin/bash
+# ============================================
+# Wazuh All-in-One Installation Script
+# Target VM: 0.0.0.0 (local/private IP)
+# ============================================
+# This script installs:
+# 1. Wazuh Indexer (for log storage/searching)
+# 2. Wazuh Server (for log analysis + rules)
+# 3. Wazuh Dashboard (for visualization)
+# ============================================
+
+set -e
+
+# -------------------------------
+# Step 1: Update system
+# -------------------------------
+echo "[1/10] Updating system packages..."
+apt-get update -y && apt-get upgrade -y
+
+# -------------------------------
+# Step 2: Install dependencies
+# -------------------------------
+echo "[2/10] Installing dependencies..."
+apt-get install -y curl apt-transport-https gnupg lsb-release tar unzip wget software-properties-common
+
+# -------------------------------
+# Step 3: Download Wazuh installation script
+# -------------------------------
+echo "[3/10] Downloading Wazuh installer..."
+curl -sO https://packages.wazuh.com/4.9/wazuh-install.sh
+
+# -------------------------------
+# Step 4: Run all-in-one installer
+# -------------------------------
+echo "[4/10] Installing Wazuh (Indexer + Server + Dashboard)..."
+bash ./wazuh-install.sh -a
+
+# -------------------------------
+# Step 5: Enable & Start Services
+# -------------------------------
+echo "[5/10] Enabling and starting services..."
+systemctl enable wazuh-manager
+systemctl enable wazuh-indexer
+systemctl enable wazuh-dashboard
+systemctl start wazuh-manager
+systemctl start wazuh-indexer
+systemctl start wazuh-dashboard
+
+# -------------------------------
+# Step 6: Firewall (optional)
+# -------------------------------
+echo "[6/10] Configuring firewall rules..."
+ufw allow 1514/udp   # Wazuh agents
+ufw allow 55000/tcp  # Wazuh API
+ufw allow 443/tcp    # Wazuh dashboard
+ufw allow 22/tcp     # SSH
+ufw --force enable
+
+# -------------------------------
+# Step 7: Get default credentials
+# -------------------------------
+echo "[7/10] Retrieving default credentials..."
+if [ -f /root/.wazuh-install-files/wazuh-passwords.txt ]; then
+    echo "Default credentials file found at /root/.wazuh-install-files/wazuh-passwords.txt"
+    cat /root/.wazuh-install-files/wazuh-passwords.txt
+else
+    echo "Credentials file not found. Check logs manually."
+fi
+
+# -------------------------------
+# Step 8: Print Access Info
+# -------------------------------
+echo "===================================================="
+echo " Wazuh Installation Completed!"
+echo " Access Wazuh Dashboard at: your ip"
+echo " Default User: admin"
+echo " Default Pass: (check /root/.wazuh-install-files/wazuh-passwords.txt)"
+echo "===================================================="
